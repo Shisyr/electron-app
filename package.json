@@ -8,8 +8,9 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "postinstall": "electron-builder install-app-deps",
-    "pack:packager": "electron-packager . app --overwrite --platform win32 --arch=x64 --asar=true --out dist/",
-    "pack:installer": "electron-installer-windows --src dist/app-win32-x64/ --dest dist/installers/"
+    "pack:packager": "electron-packager . electron-quick-start --overwrite --platform win32 --arch=x64 --asar=true --out dist/",
+    "pack:installer": "electron-installer-windows --src dist/electron-quick-start-win32-x64/ --dest dist/installers/",
+    "pack:installer:mac": "electron-installer-dmg ./dist electron-quick-start"
   },
   "repository": "https://github.com/electron/electron-quick-start",
   "keywords": [
@@ -24,6 +25,7 @@
   "devDependencies": {
     "electron": "^9.2.0",
     "electron-builder": "^22.8.0",
+    "electron-installer-dmg": "^3.0.0",
     "electron-installer-windows": "^3.0.0",
     "electron-packager": "^15.0.0",
     "file-download": "^0.1.2"

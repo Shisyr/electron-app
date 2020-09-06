@@ -2,10 +2,10 @@ const {app, BrowserWindow, dialog} = require('electron');
 const myip = require('quick-local-ip');
 const isOnline = require('is-online');
 const request = require('request');
-const requestProgress = require('request-progress');
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
+const Axios = require('axios');
 let io = require('socket.io');
 
 // Config
@@ -41,7 +41,6 @@ const RunCheckConnection = (callback) => {
               delete item.file;
               delete item.response;
               item.inProgress = false;
-              item.status = null;
               allUrlsToDownload.push(item);
             }
           })
@@ -54,16 +53,15 @@ const RunCheckConnection = (callback) => {
   }
 }
 
-const MBtoByte = 1024 * 1024;
 let isConnectedWithWeb = false;
 let isAllDownloaded = false;
 let isStartedDownload = false;
-let savePath = null;
-let limitDownloadFiles = 20;
+let limitDownloadFiles = 10;
 let currentDownloadFiles = 0;
 let listUrlsToDownload = [];
 let lastEndFile = null;
 let allUrlsToDownload = [];
+let serverHost = '';
 // Http server
 
 const SOCKET_TYPES = {
@@ -80,10 +78,8 @@ server.listen(Config.http_port);
 io = io.listen(server);
 
 io.sockets.on('connection', (socket) => {
-  console.log('CONNECTED');
   clients.push(socket);
   socket.on('disconnect', () => {
-    console.log('DISCONNECT');
     clients = clients.filter(client => client.id !== socket.id);
     socket.disconnect();
   })
@@ -93,57 +89,46 @@ io.sockets.on('connection', (socket) => {
       sendAll('CLIENT_CLEAR_LOGS', {type: 'CLEARED_FILES', listDownloadFiles: listUrlsToDownload})
     }
   })
-  socket.on('CONNECTION_WITH_WEB', (data) => {
-    if (data.type === SOCKET_TYPES.connected) {
-      isConnectedWithWeb = true
-      sendAll('connectedWithWeb', {
-        type: "CONNECTION_SUCCESSFULLY",
-        listDownloadFiles: listUrlsToDownload ? listUrlsToDownload.map(file => ({
-          id: file.id,
-          name: file.name,
-          status: file.status,
-          url: file.url,
-          downloaded: file.downloaded,
-          inProgress: file.inProgress
-        })) : []
-      });
-      if (isStartedDownload) {
-        StartToDownload(socket);
-      }
+  socket.on('CONNECTION_WITH_WEB', () => {
+    isConnectedWithWeb = true
+    const allUrls = [...listUrlsToDownload, ...allUrlsToDownload];
+    sendAll('connectedWithWeb', {
+      type: "CONNECTION_SUCCESSFULLY",
+      listDownloadFiles: allUrls
+    });
+    if (isStartedDownload) {
+      StartToDownload();
     }
-  })
+  });
   socket.on('START_DOWNLOAD', async function (data) {
-    if (data.type === SOCKET_TYPES.download && data.data && data.data.length) {
+    if (data.data && data.data.length) {
       const selection = await dialog.showOpenDialog({properties: ['openDirectory']});
       if (!selection.canceled) {
-        savePath = selection.filePaths[0];
-        const updateData = data.data.map(file => ({...file, downloaded: false, inProgress: false, error: false, path: savePath + '/'}))
-        allUrlsToDownload = allUrlsToDownload.concat(updateData);
-        fillAvailableOrders();
-        PrepareToDownload();
-        sendAll('startedDownload', {
-          type: 'STARTED_TO_DOWNLOAD',
-          listDownloadFiles: listUrlsToDownload.map((file => ({
-            id: file.id, name: file.name, status: file.status, url: file.url, downloaded: file.downloaded, error: file.error
-          })))
+        const updateData = data.data.map(file => {
+          return ({...file, downloaded: false, inProgress: false, error: false, path: selection.filePaths[0] + '/'});
         })
-        isStartedDownload = true;
-        StartToDownload(socket);
+        allUrlsToDownload = allUrlsToDownload.concat(updateData);
+        runDownloading();
       }
     }
   });
+  socket.on('RETRY_DOWNLOAD', async function (data) {
+    if (data.data) {
+      listUrlsToDownload = listUrlsToDownload.map(item => {
+        if (item.id === data.data.id && item.url === data.data.url && item.name === data.data.name && item.path === data.data.path) {
+          item.file = fs.createWriteStream(item.path + item.name);
+          item.response = download(item.url);
+          item.error = false;
+        }
+        return item;
+      });
+      isStartedDownload = true;
+      StartToDownload();
+    }
+  })
   RunCheckConnection((data) => {
     if (data === 'RECONNECT') {
-      fillAvailableOrders();
-      PrepareToDownload();
-      sendAll('startedDownload', {
-        type: 'STARTED_TO_DOWNLOAD',
-        listDownloadFiles: listUrlsToDownload.map((file => ({
-          id: file.id, name: file.name, status: file.status, url: file.url, downloaded: file.downloaded
-        })))
-      })
-      isStartedDownload = true;
-      StartToDownload(socket);
+      runDownloading();
     }
   })
 })
@@ -156,30 +141,32 @@ const sendAll = (eventName, message) => {
 
 
 const fillAvailableOrders = () => {
-  while (currentDownloadFiles <= limitDownloadFiles && allUrlsToDownload.length > 0) {
-    listUrlsToDownload.push(allUrlsToDownload.pop());
-    currentDownloadFiles += 1;
+  if (currentDownloadFiles === 0) {
+    while (currentDownloadFiles <= limitDownloadFiles && allUrlsToDownload.length > 0) {
+      listUrlsToDownload.push(allUrlsToDownload.pop());
+      currentDownloadFiles += 1;
+    }
   }
 }
 
 const download = function (uri) {
-  return requestProgress(request(encodeURI(uri), {
+  return request(encodeURI(uri), {
       headers: {
         referer: 'http://localhost:4201'
       }
-  }))
+  })
 };
 
 const InitConfigToDownload = (item, index) => {
   if (item.downloaded || item.inProgress || item.response || item.file) {
     return item;
   }
-  item.response = download(item.url);
   let fileNameWithPath = item.path + item.name;
   if (fs.existsSync(fileNameWithPath)) {
     fileNameWithPath = item.path + index + item.name;
     item.name = index + item.name;
   }
+  item.response = download(item.url);
   item.file = fs.createWriteStream(fileNameWithPath)
   return item;
 }
@@ -189,7 +176,7 @@ const PrepareToDownload = () => {
     return InitConfigToDownload(item, index);
   })
 }
-const StartToDownload = (socket) => {
+const StartToDownload = () => {
   listUrlsToDownload.forEach(async (item, index) => {
     if (!item.response || !item.file) {
       return;
@@ -198,105 +185,95 @@ const StartToDownload = (socket) => {
       if (!item.file) {
         return;
       }
-      if (item.status.totalSize !== item.file.bytesWritten) {
+      const writtenBytes = String(item.file.bytesWritten);
+      if (item.totalSize !== writtenBytes) {
         if (fs.existsSync(item.path + item.name)) {
           fs.unlink(item.path + item.name, (res) => {
+            console.log('DELETE');
             console.log(res);
+            console.log('DELETE');
             item.file = null;
           });
         }
         item.response = null;
         item.downloaded = false;
         item.inProgress = false;
-        sendAll('startedDownload', {
+        item.error = true;
+        sendAll('downloading', {
           type: 'ERROR_FILE',
-          item: {
-            id: item.id,
-            name: item.name,
-            status: item.status,
-            url: item.url,
-            inProgress: item.inProgress,
-            error: true
-          }
+          item: {id: item.id, name: item.name, url: item.url, error: item.error, totalSize: item.totalSize, path: item.path}
         })
       } else {
         item.downloaded = true;
         item.inProgress = false;
         item.response = null;
         item.file = null;
-        sendAll('startedDownload', {
-          type: 'END_DOWNLOAD',
-          item: {
-            id: item.id,
-            name: item.name,
-            status: item.status,
-            url: item.url,
-            inProgress: item.inProgress
-          }
-        })
-        if (!lastEndFile || (item.id !== lastEndFile.id || item.url !== lastEndFile.url || item.name !== lastEndFile.name)) {
-          currentDownloadFiles -= 1;
-          lastEndFile = item;
-        }
-        if (currentDownloadFiles === 0) {
-          const isContinue = currentDownloadFiles <= limitDownloadFiles && allUrlsToDownload.length > 0;
-          if (isContinue) {
-            fillAvailableOrders();
-            PrepareToDownload()
-            isStartedDownload = true;
-            sendAll('startedDownload', {
-              type: 'STARTED_TO_DOWNLOAD',
-              listDownloadFiles: listUrlsToDownload.map((file => ({
-                id: file.id, name: file.name, status: file.status, url: file.url, downloaded: file.downloaded, inProgress: file.inProgress
-              })))
+        Axios.post(item.serverPath, {imageUrl: item.url}).then(res => {
+          if (res.status === 200) {
+            sendAll('downloading', {
+              type: 'END_DOWNLOAD',
+              item: {id: item.id, name: item.name, url: item.url, downloaded: item.downloaded, totalSize: item.totalSize, path: item.path}
             })
-            StartToDownload(socket)
+            console.log('CURRENT FILES: ', currentDownloadFiles);
+            if (!lastEndFile || (item.id !== lastEndFile.id || item.url !== lastEndFile.url || item.name !== lastEndFile.name || item.path !== lastEndFile.path)) {
+              currentDownloadFiles -= 1;
+              lastEndFile = item;
+            }
+            if (currentDownloadFiles === 0) {
+              const isContinue = currentDownloadFiles <= limitDownloadFiles && allUrlsToDownload.length > 0;
+              if (isContinue) {
+                runDownloading();
+              }
+            }
+            if (!(listUrlsToDownload.some(file => !file.downloaded)) && allUrlsToDownload.length === 0) {
+              isAllDownloaded = true;
+              isStartedDownload = false;
+            }
+          } else {
+            sendAll('downloading', {
+              type: 'ERROR_FILE',
+              item: {id: item.id, name: item.name, url: item.url, downloaded: item.downloaded, totalSize: item.totalSize, path: item.path}
+            })
           }
-        }
-        if (!(listUrlsToDownload.some(file => !file.downloaded)) && allUrlsToDownload.length === 0) {
-          isAllDownloaded = true;
-          isStartedDownload = false;
-        }
+        }).catch(e => {
+          sendAll('downloading', {
+            type: 'ERROR_FILE',
+            item: {id: item.id, name: item.name, url: item.url, downloaded: item.downloaded, totalSize: item.totalSize, path: item.path}
+          })
+        })
       }
     })
     item.response.on('response', (res) => {
       if (res.statusCode === 200) {
+        item.inProgress = true;
+        item.totalSize = res.headers['content-length'];
         res.pipe(item.file);
+        sendAll('downloading', {
+          type: 'MOVE_TO_PROGRESS',
+          item: {id: item.id, name: item.name, url: item.url, inProgress: item.inProgress, totalSize: item.totalSize, path: item.path}
+        })
       } else if(res.statusCode === 404) {
-        sendAll('startedDownload', {
+        item.error = true;
+        const {id, name, url, error, path} = item;
+        sendAll('downloading', {
           type: 'NOT_FOUND',
-          item: {
-            id: item.id,
-            name: item.name,
-            status: item.status,
-            url: item.url,
-            inProgress: item.inProgress,
-            error: true
-          }
+          item: {id, name, url, error, path}
         })
       }
     })
-    item.response.on('progress', (state) => {
-      item.status = {
-        speed: state.speed ? (state.speed / MBtoByte).toFixed(1) : 0,
-        percent: (state.percent * 100),
-        totalSize: state.size.total,
-        downloadedSize: state.size.transferred ? (state.size.transferred / MBtoByte).toFixed(1) : 0,
-        remainingTime: state.time.remaining ? state.time.remaining.toFixed(1) : 0,
-      };
-      item.inProgress = true;
-      sendAll('startedDownload', {
-        type: 'PROGRESS_DOWNLOAD',
-        item: {
-          id: item.id,
-          name: item.name,
-          status: item.status,
-          url: item.url,
-          inProgress: item.inProgress
-        }
-      })
-    })
   });
+}
+
+const runDownloading = () => {
+  fillAvailableOrders();
+  PrepareToDownload()
+  isStartedDownload = true;
+  const allFiles = [...listUrlsToDownload, ...allUrlsToDownload];
+  sendAll('downloading', {
+    type: 'STARTED_TO_DOWNLOAD',
+    listDownloadFiles: allFiles
+  })
+  StartToDownload()
 }
 
 // Console print
@@ -355,7 +332,7 @@ _app.use(bodyParser.urlencoded({
 }));
 _app.use(bodyParser.json())
 
-_app.use('/assets', express.static(__dirname + '/www/assets'))
+// _app.use('/assets', express.static(__dirname + '/www/assets'))
 
 _app.get('/', function (req, res) {
   res.sendFile(__dirname + '/index.html');
