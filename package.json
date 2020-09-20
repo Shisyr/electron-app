@@ -8,8 +8,8 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "postinstall": "electron-builder install-app-deps",
-    "pack:packager": "electron-packager . app --overwrite --platform win32 --arch=x64 --asar=true --out dist/",
-    "pack:installer": "electron-installer-windows --src dist/app-win32-x64/ --dest dist/installers/"
+    "pack:packager": "electron-packager . electron-quick-start --overwrite --platform win32 --arch=x64 --asar=true --out dist/",
+    "pack:installer": "electron-installer-windows --src dist/electron-quick-start-win32-x64/ --dest dist/installers/"
   },
   "repository": "https://github.com/electron/electron-quick-start",
   "keywords": [
