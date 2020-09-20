@@ -85,7 +85,7 @@ io.sockets.on('connection', (socket) => {
   })
   socket.on('SERVER_CLEAR_LOGS', (data) => {
     if (data.isClearAll) {
-      listUrlsToDownload = listUrlsToDownload.filter(file => !file.downloaded);
+      listUrlsToDownload = listUrlsToDownload.filter(file => file.inProgress);
       sendAll('CLIENT_CLEAR_LOGS', {type: 'CLEARED_FILES', listDownloadFiles: listUrlsToDownload})
     }
   })
@@ -104,8 +104,15 @@ io.sockets.on('connection', (socket) => {
     if (data.data && data.data.length) {
       const selection = await dialog.showOpenDialog({properties: ['openDirectory']});
       if (!selection.canceled) {
-        const updateData = data.data.map(file => {
-          return ({...file, downloaded: false, inProgress: false, error: false, path: selection.filePaths[0] + '/'});
+        const updateData = data.data.map((file, index) => {
+          let newPath = selection.filePaths[0] + '/';
+          if (file.sceneName) {
+            newPath = selection.filePaths[0] + '/' + `${file.sceneName}/`;
+            if (!fs.existsSync(newPath)) {
+              fs.mkdirSync(newPath);
+            }
+          }
+          return ({...file, downloaded: false, inProgress: false, error: false, path: newPath});
         })
         allUrlsToDownload = allUrlsToDownload.concat(updateData);
         runDownloading();
@@ -295,7 +302,6 @@ function createWindow() {
   // mainWindow.loadURL('index.html')
   mainWindow.loadURL(`http://localhost:${Config.http_port}`);
 
-  mainWindow.hide();
   // Open the DevTools.
   // mainWindow.webContents.openDevTools();
   // Emitted when the window is closed.
