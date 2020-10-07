@@ -43,7 +43,7 @@ const RunCheckConnection = (callback) => {
 let isConnectedWithWeb = false;
 let isAllDownloaded = false;
 let isStartedDownload = false;
-let limitDownloadFiles = 2;
+let limitDownloadFiles = 20;
 let listUrlsToDownload = [];
 let allUrlsToDownload = [];
 // Http server
@@ -58,6 +58,7 @@ io = io.listen(server);
 
 io.sockets.on('connection', (socket) => {
   clients.push(socket);
+  console.log(clients.length);
   if (appIcon) {
     appIcon.setImage('./favicon.png');
   }
@@ -99,7 +100,12 @@ io.sockets.on('connection', (socket) => {
           return ({...file, downloaded: false, inProgress: false, error: false, path: newPath});
         })
         allUrlsToDownload = allUrlsToDownload.concat(updateData);
-        runDownloading();
+        fillAvailableOrders();
+        prepareToDownload();
+        remindAboutDownloading();
+        if (!isStartedDownload) {
+          runDownloading();
+        }
       }
     }
   });
@@ -145,12 +151,17 @@ const sendAll = (eventName, message) => {
 
 const fillAvailableOrders = () => {
   const numberFlows = Math.ceil(allUrlsToDownload.length / limitDownloadFiles)
-  for (let index = 0;index < numberFlows;index++) {
-    let beginIndex = 0;
-    listUrlsToDownload[index] = [];
-    while (beginIndex < limitDownloadFiles && allUrlsToDownload.length > 0) {
-      listUrlsToDownload[index].push(allUrlsToDownload.pop());
-      beginIndex++;
+  console.log('Number of flows: ', numberFlows);
+  const beginIndex = listUrlsToDownload.length;
+  for (let index = beginIndex;index < numberFlows + beginIndex;index++) {
+    if (!listUrlsToDownload[index]) {
+      console.log('Index: ', index);
+      let beginIndex = 0;
+      listUrlsToDownload[index] = [];
+      while (beginIndex < limitDownloadFiles && allUrlsToDownload.length > 0) {
+        listUrlsToDownload[index].push(allUrlsToDownload.pop());
+        beginIndex++;
+      }
     }
   }
 }
@@ -163,7 +174,7 @@ const download = function (uri, pathname) {
         referer: 'http://localhost:4201'
       },
       responseType: 'stream',
-      timeout: 100000000
+      timeout: 10000 * 6000
     }).then(res => {
       res.data.pipe(write);
     }).catch(err => {
@@ -173,7 +184,7 @@ const download = function (uri, pathname) {
     write.on('close', () => {
       console.log(write.finished);
       console.log(write.writableFinished);
-      resolve('DONE')
+      resolve(write.bytesWritten)
     })
   })
 };
@@ -217,6 +228,7 @@ const startToDownload = () => {
     download(item.url, item.fileNameWithPath).then(res => {
       item.inProgress = false;
       item.downloaded = true;
+      item.totalSize = res;
       sendAll('downloading', {
         type: 'END_DOWNLOAD',
         item: {
@@ -238,6 +250,7 @@ const startToDownload = () => {
           console.log('ALL DOWNLOADED');
           isAllDownloaded = true;
           isStartedDownload = false;
+          index = 0;
         }
       }
     }).catch(err => {
@@ -267,9 +280,11 @@ const startToDownload = () => {
 }
 
 const runDownloading = () => {
-  fillAvailableOrders();
-  console.log(listUrlsToDownload);
   isStartedDownload = true;
+  startToDownload();
+}
+
+const remindAboutDownloading = () => {
   const allFiles = [];
   listUrlsToDownload.forEach(it => {
     it.forEach(it2 => {
@@ -280,8 +295,6 @@ const runDownloading = () => {
     type: 'STARTED_TO_DOWNLOAD',
     listDownloadFiles: allFiles
   })
-  prepareToDownload();
-  startToDownload();
 }
 
 // Console print
