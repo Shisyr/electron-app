@@ -1,16 +1,16 @@
 {
-  "name": "electron-quick-start",
+  "name": "allpix_downloader",
   "version": "1.0.0",
   "description": "A minimal Electron application",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder build",
     "postinstall": "electron-builder install-app-deps",
-    "pack:packager": "electron-packager . electron-quick-start --overwrite --platform win32 --arch=x64 --asar=true --out dist/",
-    "pack:installer": "electron-installer-windows --src dist/electron-quick-start-win32-x64/ --dest dist/installers/",
-    "pack:installer:mac": "electron-installer-dmg ./dist electron-quick-start"
+    "pack:packager": "electron-packager . allpix-downloader --overwrite --platform win32 --arch=x64 --asar=true --out dist/",
+    "pack:installer": "electron-installer-windows --src dist/allpix-downloader-win32-x64/ --dest dist/installers/",
+    "pack:installer:mac": "electron-installer-dmg ./dist allpix-downloader"
   },
   "repository": "https://github.com/electron/electron-quick-start",
   "keywords": [
@@ -23,7 +23,8 @@
   "author": "GitHub",
   "license": "CC0-1.0",
   "devDependencies": {
-    "electron": "^9.2.0",
+    "@electron/remote": "^1.0.0",
+    "electron": "^10.1.3",
     "electron-builder": "^22.8.0",
     "electron-installer-dmg": "^3.0.0",
     "electron-installer-windows": "^3.0.0",
@@ -45,7 +46,25 @@
     "request-progress": "^3.0.0",
     "rxjs": "^6.6.2",
     "socket.io": "^2.3.0",
-    "socket.io-client": "^2.3.0",
+    "socket.io-client": "^2.3.1",
     "ws": "^7.3.1"
+  },
+  "build": {
+    "productName": "AllPix Downloader",
+    "appId": "org.allPixDownloader.version3",
+    "win": {
+      "asar": false,
+      "target": [
+        "nsis"
+      ],
+      "icon": "dist/icon.ico"
+    },
+    "nsis": {
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "oneClick": false,
+      "perMachine": true,
+      "runAfterFinish": true
+    }
   }
 }
