@@ -20,7 +20,7 @@
     "tutorial",
     "demo"
   ],
-  "author": "GitHub",
+  "author": "Ⓒ AllPix",
   "license": "CC0-1.0",
   "devDependencies": {
     "@electron/remote": "^1.0.0",
@@ -51,11 +51,21 @@
   },
   "build": {
     "productName": "AllPix Downloader",
-    "appId": "org.allPixDownloader.version3",
+    "appId": "org.allPixDownloader.version",
+    "copyright": "Ⓒ AllPix All Rights Reserved.",
     "win": {
       "asar": false,
       "target": [
         "nsis"
+      ],
+      "icon": "dist/icon.ico"
+    },
+    "mac": {
+      "productName": "AllPix Downloader",
+      "appId": "org.allPixDownloader.version",
+      "copyright": "Ⓒ AllPix All Rights Reserved.",
+      "target": [
+        "dmg"
       ],
       "icon": "dist/icon.ico"
     },
