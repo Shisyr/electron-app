@@ -1,10 +1,11 @@
 const {remote, app, BrowserWindow, screen, dialog, Menu, Tray, shell} = require('electron');
-const myip = require('quick-local-ip');
-const isOnline = require('is-online');
 const express = require('express');
 const bodyParser = require('body-parser');
+const isOnline = require('is-online');
 const fs = require('fs');
-const Axios = require('axios');
+let intervalId = null;
+let currentConnection = null;
+const { DownloaderHelper } = require('node-downloader-helper');
 const path = require('path');
 let io = require('socket.io');
 // Config
@@ -12,12 +13,30 @@ const Config = {
   http_port: '4201',
   socket_port: '4444'
 };
-let currentConnection = null;
-let intervalId = null;
 let mainWindow;
 let appIcon = null
 const isSecondInstance = app.requestSingleInstanceLock();
 console.log(!isSecondInstance);
+const initializeDownload = (url, pathToSave) => {
+    return new DownloaderHelper(
+        encodeURI(url),
+        pathToSave,
+        {
+            headers: {
+                'Accept-Encoding': 'gzip'
+            },
+            removeOnFail: true,
+            removeOnStop: true,
+            retry: {maxRetries: 5, delay: 3000},
+            httpRequestOptions: {
+                timeout: (1000 * 60) * 2
+            },
+            httpsRequestOptions: {
+                timeout: (1000 * 60) * 2
+            }
+        }
+    );
+}
 if (!isSecondInstance) {
   app.quit();
 } else {
@@ -34,39 +53,30 @@ if (!isSecondInstance) {
     path: app.getPath("exe")
   });
   const RunCheckConnection = (callback) => {
-    if (!intervalId) {
-      intervalId = setInterval(() => {
-        isOnline().then(online => {
-          if (online) {
-            if (currentConnection === 'LOST_CONNECTION') {
-              currentConnection = 'HAS_CONNECTION'
-              callback('RECONNECT');
-            }
-          } else {
-            currentConnection = 'LOST_CONNECTION';
-            listUrlsToDownload[index] = listUrlsToDownload[index].map(item => {
-              console.log(item);
-              if (!item.downloaded && item.inProgress) {
-                fs.unlinkSync(item.fileNameWithPath);
-                item.inProgress = false;
-              }
-              return item;
-            });
-            console.log('HAS NO INTERNET');
-          }
-        })
-      }, 3000)
-    }
+      if (!intervalId) {
+          intervalId = setInterval(() => {
+              isOnline().then(online => {
+                  if (online) {
+                      if (currentConnection === 'LOST_CONNECTION') {
+                          currentConnection = 'HAS_CONNECTION'
+                          callback('RECONNECT');
+                      }
+                  } else {
+                      callback('LOST')
+                      currentConnection = 'LOST_CONNECTION';
+                  }
+              })
+          }, 3000)
+      }
   }
-
   let isConnectedWithWeb = false;
-  let isAllDownloaded = false;
   let isStartedDownload = false;
-  let limitDownloadFiles = 20;
+  let limitDownloadFiles = 10;
   let downloadedImages = 0;
   let totalImages = 0;
+  let isStoppedAllRequests = false;
   let listUrlsToDownload = [];
-  let allUrlsToDownload = [];
+  let listUrlsOnOrders = [];
   // Http server
 
   let clients = [];
@@ -114,11 +124,9 @@ if (!isSecondInstance) {
                 fs.mkdirSync(newPath);
               }
             }
-            return ({...file, downloaded: false, inProgress: false, error: false, path: newPath});
+            return ({...file, pathToSave: newPath});
           })
-          allUrlsToDownload = allUrlsToDownload.concat(updateData);
-          fillAvailableOrders();
-          prepareToDownload();
+          listUrlsOnOrders = listUrlsOnOrders.concat(updateData);
           remindAboutDownloading();
           if (!isStartedDownload) {
             runDownloading();
@@ -126,12 +134,6 @@ if (!isSecondInstance) {
         }
       }
     });
-    RunCheckConnection((data) => {
-      console.log(data);
-      if (data === 'RECONNECT') {
-        startToDownload();
-      }
-    })
   })
 
   const sendAll = (eventName, message) => {
@@ -140,131 +142,88 @@ if (!isSecondInstance) {
     })
   }
 
-
-  const fillAvailableOrders = () => {
-    const numberFlows = Math.ceil(allUrlsToDownload.length / limitDownloadFiles)
-    console.log('Number of flows: ', numberFlows);
-    const beginIndex = listUrlsToDownload.length;
-    for (let index = beginIndex;index < numberFlows + beginIndex;index++) {
-      if (!listUrlsToDownload[index]) {
-        console.log('Index: ', index);
-        let beginIndex = 0;
-        listUrlsToDownload[index] = [];
-        while (beginIndex < limitDownloadFiles && allUrlsToDownload.length > 0) {
-          listUrlsToDownload[index].push(allUrlsToDownload.pop());
-          beginIndex++;
-        }
+  const moveFromOrdersToDownload = () => {
+      let index = 0;
+      while (index < limitDownloadFiles && listUrlsOnOrders.length) {
+          listUrlsToDownload.push(listUrlsOnOrders.pop());
+          index += 1;
       }
-    }
-  }
-
-  const download = function (uri, pathname) {
-    return new Promise((resolve, reject) => {
-      const write = fs.createWriteStream(pathname);
-      Axios.get(encodeURI(uri), {
-        headers: {
-          referer: 'http://localhost:4201'
-        },
-        responseType: 'stream',
-        timeout: 10000 * 6000
-      }).then(res => {
-        res.data.pipe(write);
-      }).catch(err => {
-        console.log(err);
-        reject(err);
-      });
-      write.on('close', () => {
-        console.log(write.finished);
-        console.log(write.writableFinished);
-        resolve(write.bytesWritten)
-      })
-    })
+      console.log(listUrlsOnOrders.length);
+      console.log(listUrlsToDownload);
   };
 
-  const InitConfigToDownload = (item, index) => {
-    item.fileNameWithPath = item.path + item.name;
-    if (fs.existsSync(item.path + item.name)) {
-      item.fileNameWithPath = item.path + index + item.name;
-      item.name = index + item.name;
-    }
-    return item
-  }
-
-  const prepareToDownload = () => {
-    listUrlsToDownload = listUrlsToDownload.map((item) => {
-      return item.map((it, index) => {
-        return InitConfigToDownload(it, index);
-      })
-    })
-  }
-
-  let index = 0;
   const startToDownload = () => {
-    return listUrlsToDownload[index].map(item => {
-      if (item.downloaded || item.inProgress) {
-        return item;
-      }
-      item.inProgress = true;
-      item.downloaded = false;
-      console.log('START');
-      download(item.url, item.fileNameWithPath).then(res => {
-        item.inProgress = false;
-        item.downloaded = true;
-        item.totalSize = res;
-        downloadedImages += 1;
-        console.log(downloadedImages);
-        sendAll('downloading', {
-          type: 'END_DOWNLOAD',
-          downloadedImages,
-          totalImages
-        });
-        const isNotFinishPart = listUrlsToDownload[index].some(item => !item.downloaded);
-        if (!isNotFinishPart) {
-          console.log(index);
-          if (index + 1 < listUrlsToDownload.length) {
-            index += 1;
-            startToDownload();
-          } else {
-            console.log('ALL DOWNLOADED');
-            if (appIcon) {
-              appIcon.setImage(path.join(__dirname, 'no-active-favicon.png'));
-            }
-            listUrlsToDownload = [];
-            totalImages = 0;
-            downloadedImages = 0;
-            isAllDownloaded = true;
-            isStartedDownload = false;
-            index = 0;
-          }
-        }
-      }).catch(err => {
-        console.log('ERROR ', err);
-        item.inProgress = false;
-        item.downloaded = false;
-        item.status = err.statusCode;
-        if (item.fileNameWithPath) {
-          fs.unlink(item.fileNameWithPath, (error, res) => {
-            sendAll('downloading', {
-              type: 'ERROR_FILE',
-              item: {
-                id: item.id,
-                name: item.name,
-                url: item.url,
-                error: item.error,
-                totalSize: item.totalSize,
-                path: item.path,
-                status: err.statusCode
+    listUrlsToDownload = listUrlsToDownload.map(item => {
+      if (!item.request && !item.downloaded) {
+          item.request = initializeDownload(item.url, item.pathToSave);
+          item.request.on('end', (downloadInfo) => {
+              if (downloadInfo.totalSize === downloadInfo.onDiskSize) {
+                  console.log('Download Completed')
+                  downloadedImages += 1;
+                  console.log(downloadedImages);
+                  sendAll('downloading', {
+                      type: 'END_DOWNLOAD',
+                      downloadedImages,
+                      totalImages
+                  });
+                  item.request.__request.destroy();
+                  item.request = null;
+                  item.downloaded = true;
+                  delete item;
+                  if (listUrlsOnOrders.length) {
+                      listUrlsToDownload.push(listUrlsOnOrders.pop());
+                      startToDownload();
+                      console.log(listUrlsToDownload);
+                  }
+                  if (downloadedImages === totalImages) {
+                      isStartedDownload = false;
+                  }
               }
-            })
-          });
-        }
-      });
+          })
+          item.request.on('resume', (isResume) => {
+              console.log(isResume);
+          })
+          item.request.start();
+      }
       return item;
     });
+    listUrlsToDownload = listUrlsToDownload.filter(item => item);
+    RunCheckConnection((state) => {
+        console.log(state);
+        if (state === 'LOST' && !isStoppedAllRequests) {
+            listUrlsToDownload = listUrlsToDownload.map(item => {
+                const stats = ['STARTED', 'DOWNLOADING']
+                if (item && item.request && stats.includes(item.request.state)) {
+                    try {
+                        item.request.stop();
+                        item.request.__request.destroy();
+                        isStoppedAllRequests = true;
+                    } catch (e) {
+                        console.log(e);
+                    }
+                }
+                return item;
+            });
+        } else if (state === 'RECONNECT' && isStoppedAllRequests) {
+            listUrlsToDownload = listUrlsToDownload.map(item => {
+                const stats = ['FAILED', 'STOPPED', 'SKIPPED']
+                if (item && item.request && stats.includes(item.request.state)) {
+                    try {
+                        item.request.start();
+                        isStoppedAllRequests = false;
+                    } catch (e) {
+                        console.log(e);
+                    }
+                }
+                return item;
+            });
+        }
+    })
   }
 
   const runDownloading = () => {
     isStartedDownload = true;
+    moveFromOrdersToDownload();
     startToDownload();
   }
 
@@ -275,10 +234,6 @@ if (!isSecondInstance) {
       downloadedImages
     })
   }
-
-  // Console print
-  console.log('[SERVER]: WebSocket on: ' + myip.getLocalIP4() + ':' + Config.socket_port); // print websocket ip address
-  console.log('[SERVER]: HTTP on: ' + myip.getLocalIP4() + ':' + Config.http_port); // print web server ip address
 
   // Keep a global reference of the window object, if you don't, the window will
   // be closed automatically when the JavaScript object is garbage collected.
@@ -312,18 +267,6 @@ if (!isSecondInstance) {
           label: 'Open Web Project',
           click: function() {
             shell.openExternal('https://dev.allpix.io');
-          }
-        },
-        {
-          label: 'Settings',
-          click: function () {
-            console.log("Clicked on settings")
-          }
-        },
-        {
-          label: 'Help',
-          click: function () {
-            console.log("Clicked on Help")
           }
         },
         {
